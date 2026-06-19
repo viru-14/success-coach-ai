@@ -151,7 +151,6 @@ if user_input and st.session_state.selected_student_id:
         "content":SYSTEM_PROMPT
     })
     #adding student data
-    print(st.session_state.selected_student_data)
     llm_input.append({
         "role":"system",
         "content":f"Student Data :\n {st.session_state.selected_student_data}"
@@ -162,7 +161,7 @@ if user_input and st.session_state.selected_student_id:
 
 
     # calling the llm
-    print(llm_input)
+
     llm_response = llm_call(llm_input)
 
     #storing the response
