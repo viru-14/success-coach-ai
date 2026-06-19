@@ -5,7 +5,7 @@ from RAG.ask import get_setup_data
 from services.chatgpt import llm_call_with_tools
 
 # ---------------------------------------------------------------------------
-# Tool schemas — what the LLM can see and call
+# Tool schemas
 # ---------------------------------------------------------------------------
 
 TOOLS = [
@@ -63,10 +63,13 @@ TOOLS = [
         "function": {
             "name": "get_memories",
             "description": (
-                "Retrieves relevant memories from this student's past sessions. "
-                "Call this at the start of a conversation, or when the student "
-                "references something they previously learned, asked about, or "
-                "struggled with — so you can provide continuity across sessions."
+                "Retrieves factual memories from this student's past sessions: "
+                "known stress triggers, what explanations have helped them, "
+                "recurring misunderstandings, and personal learning patterns. "
+                "Call this at the start of a conversation to personalise your "
+                "approach, or when the student references something from a past "
+                "session. Do NOT call this for session summaries — those are "
+                "handled separately for coach briefings."
             ),
             "parameters": {
                 "type": "object",
@@ -78,7 +81,7 @@ TOOLS = [
                     "query": {
                         "type": "string",
                         "description": (
-                            "What to search for in the student's memory. "
+                            "What to search for in the student's factual memory. "
                             "Use the student's current message or topic as the query."
                         ),
                     },
@@ -91,11 +94,10 @@ TOOLS = [
 
 
 # ---------------------------------------------------------------------------
-# Tool dispatcher — maps function name → actual Python function
+# Tool dispatcher
 # ---------------------------------------------------------------------------
 
 def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
-    """Execute a tool by name and return its result as a string."""
     if tool_name == "get_student_specific_data":
         result = get_student_specific_data(tool_args["student_id"])
     elif tool_name == "get_setup_data":
@@ -112,13 +114,9 @@ def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
 # Agentic loop
 # ---------------------------------------------------------------------------
 
-DEBUG = False  # set True locally to trace tool calls in terminal
+DEBUG = True
 
 def run_agent(messages: list) -> tuple[str, list]:
-    """
-    Run the LLM with tool-calling support.
-    Loops until the model returns a plain text response with no tool calls.
-    """
     msgs = list(messages)
 
     while True:

@@ -1,6 +1,6 @@
 import streamlit as st
 from services.tools import run_agent
-from services.memory import save_memory
+from services.memory import save_memory, get_all_factual_memories
 
 st.title("Student View")
 
@@ -37,18 +37,24 @@ Do NOT apologise at length, do NOT engage with the off-topic request at all,
 do NOT offer alternatives outside the platform.
 
 ## Tools — call these before answering, not after
-1. get_student_specific_data(student_id) — call when the student asks about
-   their own progress, performance, attendance, or when you need to personalise
-   a response to their level.
-2. get_setup_data(query) — call to verify a topic exists in this platform's
-   course and to retrieve the relevant content. If the topic is not found in
-   the results, treat the question as out of scope and refuse.
-3. get_memories(student_id, query) — call at the start of every new conversation
-   and whenever the student references something previously learned, discussed,
-   attempted, struggled with, or planned. Use the student's current message or
-   topic as the query to retrieve relevant context from prior sessions.
+1. get_student_specific_data(student_id)
+   Call when the student asks about their own progress, performance, or
+   attendance, or when you need to personalise a response to their level.
 
-You may call all tools in the same turn. Always prefer fetching over assuming.
+2. get_setup_data(query)
+   Call to verify a topic exists in this platform's course and to retrieve
+   relevant content. If the topic is not found in the results, refuse.
+
+3. get_memories(student_id, query)
+   Retrieves FACTUAL memory from past sessions: known stress triggers,
+   what explanations have worked, recurring misunderstandings, and personal
+   learning patterns. Call this at the start of each conversation, or when
+   the student references something from a previous session.
+   Use it to adapt your tone and approach — not to summarise past sessions
+   aloud (session summaries are a separate system for coaches).
+
+You may call multiple tools in the same turn. Always prefer fetching over assuming.
+
 
 ## When a question IS in scope
 - Give simple, clear, student-friendly explanations.
@@ -67,10 +73,16 @@ You may call all tools in the same turn. Always prefer fetching over assuming.
 # ---------------------------------------------------------------------------
 
 if "messages" not in st.session_state:
-    st.session_state.messages = []          # full conversation history
+    st.session_state.messages = []
 
 if "selected_student_id" not in st.session_state:
     st.session_state.selected_student_id = None
+
+# if "session_count" not in st.session_state:
+#     st.session_state.session_count = 0
+
+if "student_memories" not in st.session_state:
+    st.session_state.student_memories = ""
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +96,16 @@ selected_student_id = st.selectbox(
     placeholder="Choose a student",
 )
 
-# Reset conversation when a different student is chosen
+# Reset everything when a different student is chosen
 if selected_student_id != st.session_state.selected_student_id:
     st.session_state.selected_student_id = selected_student_id
     st.session_state.messages = []
+    if selected_student_id:
+        # st.session_state.session_count = get_session_count(selected_student_id)
+        st.session_state.student_memories = get_all_factual_memories(selected_student_id)
+    else:
+        # st.session_state.session_count = 0
+        st.session_state.student_memories = ""
 
 
 # ---------------------------------------------------------------------------
@@ -104,14 +122,18 @@ with col1:
 with col2:
     if st.button("✅ End Chat & Save Memory", use_container_width=True):
         if st.session_state.messages and st.session_state.selected_student_id:
-            save_memory(st.session_state.selected_student_id, st.session_state.messages)
-            st.success("Memory saved!")
+            with st.spinner("Saving memory..."):
+                save_memory(
+                    st.session_state.selected_student_id,
+                    st.session_state.messages
+                )
+            st.success("Session saved!")
         st.session_state.messages = []
         st.rerun()
 
 
 # ---------------------------------------------------------------------------
-# Render existing conversation (skip system and tool messages)
+# Render existing conversation
 # ---------------------------------------------------------------------------
 
 for message in st.session_state.messages:
@@ -130,32 +152,34 @@ user_input = st.chat_input("What do you want to ask?...")
 
 if user_input and st.session_state.selected_student_id:
 
-    # Show the user's message immediately
     st.chat_message("user").write(user_input)
 
-    # Build the messages list the agent will work with:
-    #   [system prompt]  +  [conversation history so far]  +  [new user message]
+    #current_session = st.session_state.session_count + 1  # sessions completed + this one
+
+    memory_block = (
+        f"\n\n## What you already know about this student (from past sessions)\n"
+        f"{st.session_state.student_memories}"
+        if st.session_state.student_memories else ""
+    )
+
     agent_messages = [
         {
             "role": "system",
             "content": (
-                f"{SYSTEM_PROMPT}\n\n"
-                f"The currently selected student ID is: "
-                f"{st.session_state.selected_student_id}"
+                f"{SYSTEM_PROMPT}"
+                f"{memory_block}\n\n"
+                f"Student ID: {st.session_state.selected_student_id}\n"
+                # f"Current session number: {current_session}"
             ),
         },
         *st.session_state.messages,
         {"role": "user", "content": user_input},
     ]
 
-    # Run the agentic loop — the LLM decides which tools to call and when
     with st.spinner("Thinking..."):
         final_response, updated_messages = run_agent(agent_messages)
 
-    # Persist only the new turns from this round (strip the system prompt and
-    # already-stored history at the front of updated_messages)
     new_turns = updated_messages[1 + len(st.session_state.messages):]
     st.session_state.messages.extend(new_turns)
 
-    # Render the assistant's reply
     st.chat_message("assistant").write(final_response)
