@@ -1,8 +1,13 @@
-from mem0 import MemoryClient
-from services.chatgpt import llm_call
+import os
+import json  # Added this for the JSON parsing
 import streamlit as st
 from dotenv import load_dotenv
-import os
+from mem0 import MemoryClient
+
+from services.googlesheets import log_student_signal 
+from services.chatgpt import llm_call
+
+
 
 load_dotenv()
 
@@ -96,13 +101,14 @@ def get_session_summaries(student_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Internal — generate a session summary via LLM
+# Internal — generate a session summary via LLM and log signals
 # ---------------------------------------------------------------------------
 
-def _generate_session_summary(messages: list) -> str:
+def _generate_session_summary_and_check_signals(messages: list, student_id: str) -> str:
     """
-    Ask the LLM to produce a structured summary of the session.
-    Stored in mem0 for future coach briefings and session continuity.
+    Asks the LLM to produce a structured summary of the session AND evaluate 
+    if a coach signal is required. Returns the summary for mem0 and 
+    automatically logs the signal to Google Sheets if needed.
     """
     conversation = "\n".join(
         f"{m['role'].capitalize()}: {m['content']}" for m in messages
@@ -112,23 +118,56 @@ def _generate_session_summary(messages: list) -> str:
         {
             "role": "system",
             "content": (
-                "You are a summarisation assistant. Given a tutoring session "
-                "transcript, write a concise structured summary covering:\n"
-                "- Topics discussed\n"
-                "- Concepts the student understood well\n"
-                "- Concepts the student struggled with\n"
-                "- Any decisions or action items\n"
-                "- Overall engagement and progress\n"
-                "Keep it under 200 words. Write in third person about the student."
+                "You are an AI assistant for a tutoring program. Read the following session "
+                "transcript and return a STRICT JSON object containing two things: a session summary, "
+                "and a signal evaluation to alert human coaches of any issues.\n\n"
+                
+                "Your JSON output must follow this exact structure:\n"
+                "{\n"
+                '  "summary": "A concise (under 200 words) structured summary in the third person covering: topics discussed, understood concepts, struggled concepts, action items, and overall progress.",\n'
+                '  "requires_signal": true or false. Set to true ONLY IF the student exhibits issues requiring coach intervention (e.g., severe academic struggle, attendance risks, high frustration, behavioral issues).\n'
+                '  "signal_data": If requires_signal is true, provide an object with the keys: "signal_type" (e.g., "Academic Struggle", "Mental Health"), "severity" ("Low", "Medium", "High", "Critical"), "urgency" ("Today", "Tomorrow", "This Week"), and "reason" (1-2 sentence explanation). If requires_signal is false, set this to null.\n'
+                "}\n\n"
+                "Do not include any markdown formatting like ```json in your response. Return ONLY the raw JSON object."
             ),
         },
         {
             "role": "user",
-            "content": f"Summarise this tutoring session:\n\n{conversation}",
+            "content": f"Analyze this tutoring session:\n\n{conversation}",
         },
     ]
 
-    return llm_call(prompt)
+    # 1. Get the response from your LLM
+    llm_response = llm_call(prompt)
+    
+    try:
+        # 2. Parse the JSON response
+        extracted_data = json.loads(llm_response.strip())
+        
+        # 3. Check if a signal was triggered and log it
+        if extracted_data.get("requires_signal") and extracted_data.get("signal_data"):
+            sig_data = extracted_data["signal_data"]
+            
+            # Call the Google Sheets function
+            log_student_signal(
+                student_id=student_id,
+                signal_type=sig_data.get("signal_type", "Unknown"),
+                severity=sig_data.get("severity", "Medium"),
+                urgency=sig_data.get("urgency", "This Week"),
+                reason=sig_data.get("reason", "Flagged by AI summarizer.")
+            )
+            
+        # 4. Return the summary string so your existing mem0 flow works perfectly
+        return extracted_data.get("summary", "Summary could not be generated.")
+
+    except json.JSONDecodeError:
+        print("Error: The LLM did not return valid JSON. Fallback to raw text.")
+        # If the LLM fails to output JSON, you can just return the raw text 
+        # so you don't lose the summary entirely.
+        return llm_response
+    except Exception as e:
+        print(f"An error occurred during summarization/signaling: {e}")
+        return "Error generating summary."
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +197,9 @@ def save_memory(student_id: str, messages: list):
     client.add(filtered, user_id=_factual_uid(student_id))
 
     # 2. Session summary — structured, stored in the sessions namespace
-    summary = _generate_session_summary(filtered)
+    # UPDATED: Now calls the combined function and passes the student_id
+    summary = _generate_session_summary_and_check_signals(filtered, student_id)
+    
     client.add(
         [{"role": "assistant", "content": summary}],
         user_id=_session_uid(student_id)
