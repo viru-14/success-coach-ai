@@ -2,3 +2,5 @@ streamlit
 openai
 python-dotenv
 gspread
+chromadb
+langchain_community

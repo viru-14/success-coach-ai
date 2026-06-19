@@ -3,7 +3,6 @@ import json
 import gspread
 import streamlit as st
 from dotenv import load_dotenv
-import streamlit as st
 
 load_dotenv()
 
@@ -17,29 +16,29 @@ except Exception:
 
 gc = gspread.service_account_from_dict(secret_credentials)
 
-# 2. Open the spreadsheet using your ID
 SPREADSHEET_ID = "1vKn-9LCCcBPjfcFUgEzAWBGpsjzCJtPvrln05rR1Ht0"
 spreadsheet = gc.open_by_key(SPREADSHEET_ID)
 
-def get_student_specific_data(student_id:str):
-    # select all the tabs   
-    all_sheets = spreadsheet.worksheets()
 
+def get_student_specific_data(student_id: str) -> str:
+    """
+    Fetch all records that belong to a specific student across every
+    data sheet (excluding signal_sheet).
+
+    Returns a formatted string the LLM can read as context.
+    """
+    all_sheets = spreadsheet.worksheets()
     student_data = []
 
-    #print(all_sheets)
-
     for sheet in all_sheets:
-        if(sheet.title != "signal_sheet"):
+        if sheet.title != "signal_sheet":
             data = sheet.get_all_records()
             for entry in data:
                 if student_id in entry.values():
-                    student_data.append(entry)  
-    
-    formatted = []
-    for i, record in enumerate(student_data, 1):
-        formatted.append(f"Record {i}: {record}")
+                    student_data.append(entry)
 
+    if not student_data:
+        return f"No data found for student_id={student_id}"
+
+    formatted = [f"Record {i}: {record}" for i, record in enumerate(student_data, 1)]
     return "\n".join(formatted)
-
-#print(get_student_specific_data("STU001"))
