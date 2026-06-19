@@ -3,11 +3,17 @@ import json
 import gspread
 import streamlit as st
 from dotenv import load_dotenv
+import streamlit as st
 
 load_dotenv()
 
-env_creds = os.getenv("GCP_SERVICE_ACCOUNT")
-secret_credentials = json.loads(env_creds)
+try:
+    # 1. Try Streamlit Cloud setup first
+    secret_credentials = dict(st.secrets["gcp_service_account"])
+except Exception:
+    # 2. If st.secrets fails or doesn't exist locally, fallback to your .env file
+    env_creds = os.getenv("GCP_SERVICE_ACCOUNT")
+    secret_credentials = json.loads(env_creds)
 
 gc = gspread.service_account_from_dict(secret_credentials)
 
