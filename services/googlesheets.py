@@ -18,6 +18,7 @@ except Exception:
 gc = gspread.service_account_from_dict(secret_credentials)
 
 SPREADSHEET_ID = "1Q6pzpOvreiVxQ5PCtGQE67d3YeLM17wnuEXTUiMtx_I"
+CALENDAR_ID    = "48d1b1e9d9c84c7049be72fb4bd35d4f912333e90089c83affd39da03be5da71@group.calendar.google.com"
 spreadsheet = gc.open_by_key(SPREADSHEET_ID)
 
 
@@ -89,4 +90,57 @@ def log_student_signal(student_id: str, signal_type: str, severity: str, urgency
         print(f"An error occurred while logging the signal: {e}")
         return False
 
-# print(get_student_specific_data("STU001"))
+
+# ---------------------------------------------------------------------------
+# Coach — fetch pending signals for day plan generation
+# ---------------------------------------------------------------------------
+
+def get_pending_signals() -> str:
+    """
+    Fetch all unactioned signals from signal_sheet, pre-sorted by severity
+    then urgency so the agent sees the most critical students first.
+
+    Severity order : Critical > High > Medium > Low
+    Urgency order  : Today > Tomorrow > This Week
+    """
+    SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    URGENCY_RANK  = {"today": 0, "tomorrow": 1, "this week": 2}
+
+    try:
+        sheet   = spreadsheet.worksheet("signal_sheet")
+        records = sheet.get_all_records()
+
+        pending = [
+            r for r in records
+            if str(r.get("actioned", "")).strip().lower() == "no"
+        ]
+
+        if not pending:
+            return (
+                "No pending signals found. "
+                "All students are currently on track — no sessions needed today."
+            )
+
+        pending.sort(key=lambda r: (
+            SEVERITY_RANK.get(str(r.get("severity", "")).strip().lower(), 99),
+            URGENCY_RANK.get(str(r.get("urgency",  "")).strip().lower(), 99),
+        ))
+
+        lines = [f"Total pending signals: {len(pending)}\n"]
+        for i, r in enumerate(pending, 1):
+            lines.append(
+                f"Signal {i}:\n"
+                f"  Student ID : {r.get('student_id', 'N/A')}\n"
+                f"  Type       : {r.get('signal_type', 'N/A')}\n"
+                f"  Severity   : {r.get('severity', 'N/A')}\n"
+                f"  Urgency    : {r.get('urgency', 'N/A')}\n"
+                f"  Reason     : {r.get('reason', 'N/A')}\n"
+                f"  Logged at  : {r.get('timestamp', 'N/A')}"
+            )
+
+        return "\n\n".join(lines)
+
+    except gspread.exceptions.WorksheetNotFound:
+        return "Error: 'signal_sheet' worksheet was not found in the spreadsheet."
+    except Exception as e:
+        return f"Error fetching signals: {e}"

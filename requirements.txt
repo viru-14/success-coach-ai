@@ -6,3 +6,4 @@ mem0ai
 langchain
 langgraph
 langchain-chroma
+google-api-python-client

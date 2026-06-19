@@ -1,16 +1,22 @@
+import logging
 import streamlit as st
-from services.tools import run_agent
+from services.tools import run_agent, run_coach_agent
 from services.memory import save_memory, get_all_factual_memories
 
-st.title("Student View")
+# Suppress the noisy mem0 "Regional Access Boundary" warning — it is
+# a retryable internal warning from mem0's transport layer and does not
+# affect any functionality.
+logging.getLogger("mem0").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 STUDENTS_ID = ["STU001", "STU002", "STU003"]
+COACH_ID    = "COACH001"
 
-SYSTEM_PROMPT = """
+STUDENT_SYSTEM_PROMPT = """
 You are an AI Coach assistant strictly limited to this online learning platform.
 
 ## HARD RULES — never break these
@@ -57,7 +63,6 @@ do NOT offer alternatives outside the platform.
 
 You may call multiple tools in the same turn. Always prefer fetching over assuming.
 
-
 ## When a question IS in scope
 - Give simple, clear, student-friendly explanations.
 - Use step-by-step reasoning when needed.
@@ -69,10 +74,131 @@ You may call multiple tools in the same turn. Always prefer fetching over assumi
   schedule a session?"
 """
 
+COACH_DAY_PLAN_PROMPT = """
+You are an expert academic coaching assistant for Success Coach AI.
+Your job is to generate a structured, actionable day plan for the coach
+based entirely on student signals — not assumptions.
+
+## Workflow — follow these steps in order
+
+### Step 1 — Pull the data
+1. Call get_pending_signals to see every student who needs attention.
+   If there are no pending signals, tell the coach all students are on
+   track and stop — no further steps needed.
+2. For EACH flagged student call BOTH:
+   - get_student_specific_data(student_id)
+   - get_session_summaries(student_id)
+
+### Step 2 — Prioritise
+Rank students strictly by:
+  Severity  → Critical > High > Medium > Low
+  Urgency   → Today > Tomorrow > This Week
+Students flagged "Today" must always be scheduled today.
+
+### Step 3 — Build the schedule
+- Sessions start at 09:00. Each session is 45 minutes; leave a 15-minute
+  gap between sessions. Maximum 5 students today (last slot ends ~14:00).
+- Students beyond the 5-slot limit are deferred to tomorrow.
+- Assign a session type from this mapping:
+    Academic Struggle        → "Concept Review Session"
+    Mental Health/Stress     → "Check-in Session"
+    Attendance Risk          → "Re-engagement Session"
+    Performance Drop         → "Performance Review Session"
+    Behavioral Issues        → "Coaching Session"
+
+### Step 4 — Create calendar events
+For every student scheduled TODAY, call create_calendar_event:
+  title       : "[Student ID] – [Session Type]"
+  start_time  : "HH:MM" (24-hour)
+  end_time    : "HH:MM" (24-hour)
+  description : Signal reason + 1-2 key talking points from their history
+Do NOT call create_calendar_event for deferred students.
+
+### Step 5 — Return the plan
+Format the final response as:
+
+**📅 Day Plan — [Today's date]**
+**[N] sessions scheduled · [M] deferred**
+
+─── TODAY'S SESSIONS ───
+For each student:
+  🕘 HH:MM – HH:MM | [Student ID] | [Session Type]
+  Severity: X  |  Signal: [signal type]
+  Why today: [one sentence from the signal reason]
+  Focus: [1-2 bullet talking points drawn from their data and history]
+
+─── DEFERRED TO TOMORROW ───
+For each deferred student:
+  • [Student ID] — [brief reason they were bumped]
+
+─── COACH SUMMARY ───
+2-3 sentences on the overall theme of today's caseload and the top priority.
+"""
+
+# ---------------------------------------------------------------------------
+# Page config & custom CSS
+# ---------------------------------------------------------------------------
+
+st.set_page_config(page_title="Success Coach AI", page_icon="🎓", layout="centered")
+
+st.markdown("""
+<style>
+/* ── View toggle pill ─────────────────────────────────────────── */
+div[data-testid="stHorizontalBlock"]:has(.view-toggle) {
+    gap: 0;
+}
+
+.stButton > button {
+    border-radius: 0;
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+.stButton > button:hover {
+    background: #f3f4f6;
+    border-color: #9ca3af;
+}
+
+/* Active tab feeling via session state class injection isn't trivial in
+   Streamlit, so we rely on button labels + use_container_width for symmetry */
+
+/* ── Section header badges ───────────────────────────────────── */
+.badge-student {
+    display: inline-block;
+    background: #dbeafe;
+    color: #1e40af;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-bottom: 0.5rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.badge-coach {
+    display: inline-block;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 999px;
+    margin-bottom: 0.5rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Session state initialisation
 # ---------------------------------------------------------------------------
+
+if "view" not in st.session_state:
+    st.session_state.view = "student"          # "student" | "coach"
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -80,108 +206,159 @@ if "messages" not in st.session_state:
 if "selected_student_id" not in st.session_state:
     st.session_state.selected_student_id = None
 
-# if "session_count" not in st.session_state:
-#     st.session_state.session_count = 0
-
 if "student_memories" not in st.session_state:
     st.session_state.student_memories = ""
 
-
-# ---------------------------------------------------------------------------
-# Student selector
-# ---------------------------------------------------------------------------
-
-selected_student_id = st.selectbox(
-    "Select Student ID",
-    STUDENTS_ID,
-    index=None,
-    placeholder="Choose a student",
-)
-
-# Reset everything when a different student is chosen
-if selected_student_id != st.session_state.selected_student_id:
-    st.session_state.selected_student_id = selected_student_id
-    st.session_state.messages = []
-    if selected_student_id:
-        # st.session_state.session_count = get_session_count(selected_student_id)
-        st.session_state.student_memories = get_all_factual_memories(selected_student_id)
-    else:
-        # st.session_state.session_count = 0
-        st.session_state.student_memories = ""
+if "day_plan" not in st.session_state:
+    st.session_state.day_plan = ""
 
 
 # ---------------------------------------------------------------------------
-# Refresh and End Chat buttons
+# ── View Toggle (top of page, always visible) ────────────────────────────
 # ---------------------------------------------------------------------------
 
-col1, col2 = st.columns(2)
+st.markdown("### 🎓 Success Coach AI")
+st.markdown("---")
 
-with col1:
-    if st.button("🔄 Refresh", use_container_width=True):
-        st.session_state.messages = []
+col_sv, col_cv = st.columns(2)
+
+with col_sv:
+    student_label = "🎒 Student View" if st.session_state.view != "student" else "✅ Student View (active)"
+    if st.button(student_label, use_container_width=True, key="btn_student_view"):
+        st.session_state.view = "student"
         st.rerun()
 
-with col2:
-    if st.button("✅ End Chat & Save Memory", use_container_width=True):
-        if st.session_state.messages and st.session_state.selected_student_id:
-            with st.spinner("Saving memory..."):
-                save_memory(
-                    st.session_state.selected_student_id,
-                    st.session_state.messages
-                )
-            st.success("Session saved!")
-        st.session_state.messages = []
+with col_cv:
+    coach_label = "🧑‍🏫 Coach View" if st.session_state.view != "coach" else "✅ Coach View (active)"
+    if st.button(coach_label, use_container_width=True, key="btn_coach_view"):
+        st.session_state.view = "coach"
         st.rerun()
 
-
-# ---------------------------------------------------------------------------
-# Render existing conversation
-# ---------------------------------------------------------------------------
-
-for message in st.session_state.messages:
-    role = message.get("role") if isinstance(message, dict) else message.role
-    content = message.get("content") if isinstance(message, dict) else message.content
-
-    if role in ("user", "assistant") and content:
-        st.chat_message(role).write(content)
+st.markdown("")   # breathing room
 
 
-# ---------------------------------------------------------------------------
-# Chat input + agentic loop
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# ██████████████████████████  STUDENT VIEW  ██████████████████████████████████
+# ===========================================================================
 
-user_input = st.chat_input("What do you want to ask?...")
+if st.session_state.view == "student":
 
-if user_input and st.session_state.selected_student_id:
+    st.markdown('<span class="badge-student">Student View</span>', unsafe_allow_html=True)
+    st.subheader("Student Chat")
 
-    st.chat_message("user").write(user_input)
-
-    #current_session = st.session_state.session_count + 1  # sessions completed + this one
-
-    memory_block = (
-        f"\n\n## What you already know about this student (from past sessions)\n"
-        f"{st.session_state.student_memories}"
-        if st.session_state.student_memories else ""
+    # ── Student selector ────────────────────────────────────────────────────
+    selected_student_id = st.selectbox(
+        "Select Student ID",
+        STUDENTS_ID,
+        index=None,
+        placeholder="Choose a student",
+        key="student_selector",
     )
 
-    agent_messages = [
-        {
-            "role": "system",
-            "content": (
-                f"{SYSTEM_PROMPT}"
-                f"{memory_block}\n\n"
-                f"Student ID: {st.session_state.selected_student_id}\n"
-                # f"Current session number: {current_session}"
-            ),
-        },
-        *st.session_state.messages,
-        {"role": "user", "content": user_input},
-    ]
+    if selected_student_id != st.session_state.selected_student_id:
+        st.session_state.selected_student_id = selected_student_id
+        st.session_state.messages = []
+        if selected_student_id:
+            st.session_state.student_memories = get_all_factual_memories(selected_student_id)
+        else:
+            st.session_state.student_memories = ""
 
-    with st.spinner("Thinking..."):
-        final_response, updated_messages = run_agent(agent_messages)
+    # ── Action buttons ──────────────────────────────────────────────────────
+    col1, col2 = st.columns(2)
 
-    new_turns = updated_messages[1 + len(st.session_state.messages):]
-    st.session_state.messages.extend(new_turns)
+    with col1:
+        if st.button("🔄 Refresh", use_container_width=True, key="student_refresh"):
+            st.session_state.messages = []
+            st.rerun()
 
-    st.chat_message("assistant").write(final_response)
+    with col2:
+        if st.button("✅ End Chat & Save Memory", use_container_width=True, key="student_save"):
+            if st.session_state.messages and st.session_state.selected_student_id:
+                with st.spinner("Saving memory..."):
+                    save_memory(
+                        st.session_state.selected_student_id,
+                        st.session_state.messages,
+                    )
+                st.success("Session saved!")
+            st.session_state.messages = []
+            st.rerun()
+
+    # ── Render conversation ─────────────────────────────────────────────────
+    for message in st.session_state.messages:
+        role    = message.get("role")    if isinstance(message, dict) else message.role
+        content = message.get("content") if isinstance(message, dict) else message.content
+        if role in ("user", "assistant") and content:
+            st.chat_message(role).write(content)
+
+    # ── Chat input ──────────────────────────────────────────────────────────
+    user_input = st.chat_input("What do you want to ask?...")
+
+    if user_input and st.session_state.selected_student_id:
+
+        st.chat_message("user").write(user_input)
+
+        memory_block = (
+            f"\n\n## What you already know about this student (from past sessions)\n"
+            f"{st.session_state.student_memories}"
+            if st.session_state.student_memories else ""
+        )
+
+        agent_messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"{STUDENT_SYSTEM_PROMPT}"
+                    f"{memory_block}\n\n"
+                    f"Student ID: {st.session_state.selected_student_id}\n"
+                ),
+            },
+            *st.session_state.messages,
+            {"role": "user", "content": user_input},
+        ]
+
+        with st.spinner("Thinking..."):
+            final_response, updated_messages = run_agent(agent_messages)
+
+        new_turns = updated_messages[1 + len(st.session_state.messages):]
+        st.session_state.messages.extend(new_turns)
+
+        st.chat_message("assistant").write(final_response)
+
+
+# ===========================================================================
+# ██████████████████████████  COACH VIEW  ████████████████████████████████████
+# ===========================================================================
+
+elif st.session_state.view == "coach":
+
+    st.markdown('<span class="badge-coach">Coach View</span>', unsafe_allow_html=True)
+    st.subheader("Coach Dashboard")
+
+    st.markdown("")
+
+    # ── Generate Day Plan button ────────────────────────────────────────────
+    if st.button("📋 Generate Day Plan", use_container_width=True, key="gen_day_plan"):
+
+        with st.spinner("Building your day plan..."):
+            plan_messages = [
+                {
+                    "role": "system",
+                    "content": COACH_DAY_PLAN_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Coach ID: {COACH_ID}\n"
+                        f"Student IDs on platform: {', '.join(STUDENTS_ID)}\n"
+                        "Please generate today's coaching day plan."
+                    ),
+                },
+            ]
+            day_plan_response, _ = run_coach_agent(plan_messages)
+            st.session_state.day_plan = day_plan_response
+
+    # ── Render plan ─────────────────────────────────────────────────────────
+    if st.session_state.day_plan:
+        st.markdown("#### 📅 Today's Day Plan")
+        with st.container(border=True):
+            st.markdown(st.session_state.day_plan)
