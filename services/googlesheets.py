@@ -1,10 +1,15 @@
+import os
+import json
 import gspread
-from pathlib import Path
+import streamlit as st
+from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).parent.parent  
-gc = gspread.service_account(
-    filename=f"{BASE_DIR}/service-credentials.json"
-)
+load_dotenv()
+
+env_creds = os.getenv("GCP_SERVICE_ACCOUNT")
+secret_credentials = json.loads(env_creds)
+
+gc = gspread.service_account_from_dict(secret_credentials)
 
 # 2. Open the spreadsheet using your ID
 SPREADSHEET_ID = "1vKn-9LCCcBPjfcFUgEzAWBGpsjzCJtPvrln05rR1Ht0"
