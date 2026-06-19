@@ -1,16 +1,18 @@
 import streamlit as st
 from services.tools import run_agent
+from services.memory import save_memory
 
 st.title("Student View")
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
 STUDENTS_ID = ["STU001", "STU002", "STU003"]
 
 SYSTEM_PROMPT = """
 You are an AI Coach assistant strictly limited to this online learning platform.
- 
+
 ## HARD RULES — never break these
 1. You ONLY answer questions that are directly about:
    - The course content available in THIS platform (verified via get_setup_data)
@@ -26,14 +28,14 @@ You are an AI Coach assistant strictly limited to this online learning platform.
    the topic actually exists in this platform's course. If it does not appear
    in the retrieved data, refuse — even if the topic sounds academic.
 4. If you are unsure whether something is in scope, refuse.
- 
+
 ## When a request is out of scope
 Respond with exactly this and nothing more:
 "I can only help you with the course content and your learning progress on
 this platform. Let's get back to your studies!"
 Do NOT apologise at length, do NOT engage with the off-topic request at all,
 do NOT offer alternatives outside the platform.
- 
+
 ## Tools — call these before answering, not after
 1. get_student_specific_data(student_id) — call when the student asks about
    their own progress, performance, attendance, or when you need to personalise
@@ -41,9 +43,13 @@ do NOT offer alternatives outside the platform.
 2. get_setup_data(query) — call to verify a topic exists in this platform's
    course and to retrieve the relevant content. If the topic is not found in
    the results, treat the question as out of scope and refuse.
- 
-You may call both tools in the same turn. Always prefer fetching over assuming.
- 
+3. get_memories(student_id, query) — call at the start of every new conversation
+   and whenever the student references something previously learned, discussed,
+   attempted, struggled with, or planned. Use the student's current message or
+   topic as the query to retrieve relevant context from prior sessions.
+
+You may call all tools in the same turn. Always prefer fetching over assuming.
+
 ## When a question IS in scope
 - Give simple, clear, student-friendly explanations.
 - Use step-by-step reasoning when needed.
@@ -54,7 +60,7 @@ You may call both tools in the same turn. Always prefer fetching over assuming.
   "This might be easier to cover with your coach directly. Should I help
   schedule a session?"
 """
- 
+
 
 # ---------------------------------------------------------------------------
 # Session state initialisation
@@ -85,12 +91,23 @@ if selected_student_id != st.session_state.selected_student_id:
 
 
 # ---------------------------------------------------------------------------
-# Refresh button
+# Refresh and End Chat buttons
 # ---------------------------------------------------------------------------
 
-if st.button("Refresh"):
-    st.session_state.messages = []
-    st.rerun()
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("🔄 Refresh", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
+
+with col2:
+    if st.button("✅ End Chat & Save Memory", use_container_width=True):
+        if st.session_state.messages and st.session_state.selected_student_id:
+            save_memory(st.session_state.selected_student_id, st.session_state.messages)
+            st.success("Memory saved!")
+        st.session_state.messages = []
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +144,7 @@ if user_input and st.session_state.selected_student_id:
                 f"{st.session_state.selected_student_id}"
             ),
         },
-        *st.session_state.messages,          # take everything and put it here 
+        *st.session_state.messages,
         {"role": "user", "content": user_input},
     ]
 

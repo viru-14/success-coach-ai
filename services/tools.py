@@ -1,5 +1,6 @@
 import json
 from services.googlesheets import get_student_specific_data
+from services.memory import get_memories
 from RAG.ask import get_setup_data
 from services.chatgpt import llm_call_with_tools
 
@@ -24,10 +25,7 @@ TOOLS = [
                 "properties": {
                     "student_id": {
                         "type": "string",
-                        "description": (
-                            "The unique student identifier (e.g. STU001). "
-                            "Use the currently selected student's ID."
-                        ),
+                        "description": "The unique student identifier (e.g. STU001).",
                     }
                 },
                 "required": ["student_id"],
@@ -52,13 +50,40 @@ TOOLS = [
                         "type": "string",
                         "description": (
                             "A short, specific search query describing what to "
-                            "look up in the platform docs. "
-                            "Example: 'how does login work', "
-                            "'what topics are covered', 'how to submit assignment'."
+                            "look up in the platform docs."
                         ),
                     }
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_memories",
+            "description": (
+                "Retrieves relevant memories from this student's past sessions. "
+                "Call this at the start of a conversation, or when the student "
+                "references something they previously learned, asked about, or "
+                "struggled with — so you can provide continuity across sessions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "student_id": {
+                        "type": "string",
+                        "description": "The unique student identifier (e.g. STU001).",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "What to search for in the student's memory. "
+                            "Use the student's current message or topic as the query."
+                        ),
+                    },
+                },
+                "required": ["student_id", "query"],
             },
         },
     },
@@ -75,6 +100,8 @@ def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
         result = get_student_specific_data(tool_args["student_id"])
     elif tool_name == "get_setup_data":
         result = get_setup_data(tool_args["query"])
+    elif tool_name == "get_memories":
+        result = get_memories(tool_args["student_id"], tool_args["query"])
     else:
         result = f"[Error] Unknown tool: {tool_name}"
 
@@ -82,33 +109,22 @@ def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agentic loop — keeps calling the LLM until it produces a plain text reply
+# Agentic loop
 # ---------------------------------------------------------------------------
 
-DEBUG = False  # Bro is only for debuging purposes
+DEBUG = False  # set True locally to trace tool calls in terminal
 
 def run_agent(messages: list) -> tuple[str, list]:
     """
     Run the LLM with tool-calling support.
-
-    Keeps looping until the model returns a plain text response (no tool calls).
-
-    Args:
-        messages: The full conversation history including system prompt(s).
-
-    Returns:
-        (final_text_response, updated_messages_list)
-        The caller should persist updated_messages_list so tool results
-        become part of the conversation history for future turns.
+    Loops until the model returns a plain text response with no tool calls.
     """
     msgs = list(messages)
 
     while True:
         response = llm_call_with_tools(msgs, tools=TOOLS)
-        choice = response.choices[0]    
-        assistant_message = choice.message
+        assistant_message = response.choices[0].message
 
-        # ── No tool calls → we have our final answer ──────────────────────
         if not assistant_message.tool_calls:
             msgs.append({
                 "role": "assistant",
@@ -116,7 +132,6 @@ def run_agent(messages: list) -> tuple[str, list]:
             })
             return assistant_message.content, msgs
 
-        # ── One or more tool calls → execute them, then loop ──────────────
         msgs.append(assistant_message)
 
         for tool_call in assistant_message.tool_calls:
