@@ -14,7 +14,7 @@ from services.chatgpt import llm_call_with_tools
 
 
 # ---------------------------------------------------------------------------
-# Student tool schemas (unchanged)
+# Student tool schemas 
 # ---------------------------------------------------------------------------
 
 TOOLS = [
@@ -234,7 +234,7 @@ COACH_TOOLS = [
 
 
 # ---------------------------------------------------------------------------
-# Tool dispatcher — student (unchanged)
+# Tool dispatcher — student 
 # ---------------------------------------------------------------------------
 
 def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
@@ -294,7 +294,7 @@ def _dispatch_coach_tool(tool_name: str, tool_args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Agentic loop — student (unchanged)
+# Agentic loop — student 
 # ---------------------------------------------------------------------------
 
 DEBUG = True

@@ -36,7 +36,7 @@ Return the brief in EXACTLY this markdown structure and nothing else:
 Keep the whole brief under ~250 words. Be factual and specific — no filler.
 """
 
-
+# to generate brief of any student
 def generate_student_brief(
     student_id: str,
     *,
@@ -94,3 +94,5 @@ def generate_student_brief(
     ]
 
     return llm_fn(messages)
+
+#print(generate_student_brief())
