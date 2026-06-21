@@ -1,13 +1,20 @@
 import json
-from services.googlesheets import get_student_specific_data, get_pending_signals
-from services.memory import get_memories, get_session_summaries
+
+from services.googlesheets import (
+    get_student_specific_data,
+    get_pending_signals,
+)
+from services.memory import (
+    get_memories,
+    get_session_summaries,
+)
 from services.calendar import create_calendar_event
 from RAG.ask import get_setup_data
 from services.chatgpt import llm_call_with_tools
 
 
 # ---------------------------------------------------------------------------
-# Student tool schemas  (unchanged)
+# Student tool schemas (unchanged)
 # ---------------------------------------------------------------------------
 
 TOOLS = [
@@ -27,7 +34,9 @@ TOOLS = [
                 "properties": {
                     "student_id": {
                         "type": "string",
-                        "description": "The unique student identifier (e.g. STU001).",
+                        "description": (
+                            "The unique student identifier (e.g. STU001)."
+                        ),
                     }
                 },
                 "required": ["student_id"],
@@ -78,7 +87,9 @@ TOOLS = [
                 "properties": {
                     "student_id": {
                         "type": "string",
-                        "description": "The unique student identifier (e.g. STU001).",
+                        "description": (
+                            "The unique student identifier (e.g. STU001)."
+                        ),
                     },
                     "query": {
                         "type": "string",
@@ -132,7 +143,9 @@ COACH_TOOLS = [
                 "properties": {
                     "student_id": {
                         "type": "string",
-                        "description": "The unique student identifier (e.g. STU001).",
+                        "description": (
+                            "The unique student identifier (e.g. STU001)."
+                        ),
                     }
                 },
                 "required": ["student_id"],
@@ -153,7 +166,9 @@ COACH_TOOLS = [
                 "properties": {
                     "student_id": {
                         "type": "string",
-                        "description": "The unique student identifier (e.g. STU001).",
+                        "description": (
+                            "The unique student identifier (e.g. STU001)."
+                        ),
                     }
                 },
                 "required": ["student_id"],
@@ -181,11 +196,15 @@ COACH_TOOLS = [
                     },
                     "start_time": {
                         "type": "string",
-                        "description": "Session start in 24-hour 'HH:MM', e.g. '09:00'.",
+                        "description": (
+                            "Session start in 24-hour 'HH:MM', e.g. '09:00'."
+                        ),
                     },
                     "end_time": {
                         "type": "string",
-                        "description": "Session end in 24-hour 'HH:MM', e.g. '09:45'.",
+                        "description": (
+                            "Session end in 24-hour 'HH:MM', e.g. '09:45'."
+                        ),
                     },
                     "description": {
                         "type": "string",
@@ -202,7 +221,12 @@ COACH_TOOLS = [
                         ),
                     },
                 },
-                "required": ["title", "start_time", "end_time", "description"],
+                "required": [
+                    "title",
+                    "start_time",
+                    "end_time",
+                    "description",
+                ],
             },
         },
     },
@@ -210,20 +234,30 @@ COACH_TOOLS = [
 
 
 # ---------------------------------------------------------------------------
-# Tool dispatcher — student  (unchanged)
+# Tool dispatcher — student (unchanged)
 # ---------------------------------------------------------------------------
 
 def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
     if tool_name == "get_student_specific_data":
         result = get_student_specific_data(tool_args["student_id"])
+
     elif tool_name == "get_setup_data":
         result = get_setup_data(tool_args["query"])
+
     elif tool_name == "get_memories":
-        result = get_memories(tool_args["student_id"], tool_args["query"])
+        result = get_memories(
+            tool_args["student_id"],
+            tool_args["query"],
+        )
+
     else:
         result = f"[Error] Unknown tool: {tool_name}"
 
-    return json.dumps(result) if not isinstance(result, str) else result
+    return (
+        json.dumps(result)
+        if not isinstance(result, str)
+        else result
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -233,10 +267,13 @@ def _dispatch_tool(tool_name: str, tool_args: dict) -> str:
 def _dispatch_coach_tool(tool_name: str, tool_args: dict) -> str:
     if tool_name == "get_pending_signals":
         result = get_pending_signals()
+
     elif tool_name == "get_student_specific_data":
         result = get_student_specific_data(tool_args["student_id"])
+
     elif tool_name == "get_session_summaries":
         result = get_session_summaries(tool_args["student_id"])
+
     elif tool_name == "create_calendar_event":
         result = create_calendar_event(
             title=tool_args["title"],
@@ -245,48 +282,71 @@ def _dispatch_coach_tool(tool_name: str, tool_args: dict) -> str:
             description=tool_args["description"],
             date=tool_args.get("date"),
         )
+
     else:
         result = f"[Error] Unknown coach tool: {tool_name}"
 
-    return json.dumps(result) if not isinstance(result, str) else result
+    return (
+        json.dumps(result)
+        if not isinstance(result, str)
+        else result
+    )
 
 
 # ---------------------------------------------------------------------------
-# Agentic loop — student  (unchanged)
+# Agentic loop — student (unchanged)
 # ---------------------------------------------------------------------------
 
 DEBUG = True
+
 
 def run_agent(messages: list) -> tuple[str, list]:
     msgs = list(messages)
 
     while True:
-        response = llm_call_with_tools(msgs, tools=TOOLS)
+        response = llm_call_with_tools(
+            msgs,
+            tools=TOOLS,
+        )
+
         assistant_message = response.choices[0].message
 
         if not assistant_message.tool_calls:
-            msgs.append({
-                "role": "assistant",
-                "content": assistant_message.content,
-            })
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_message.content,
+                }
+            )
+
             return assistant_message.content, msgs
 
         msgs.append(assistant_message)
 
         for tool_call in assistant_message.tool_calls:
             func_name = tool_call.function.name
-            func_args = json.loads(tool_call.function.arguments)
+            func_args = json.loads(
+                tool_call.function.arguments
+            )
 
             if DEBUG:
-                print(f"[Agent] Calling tool: {func_name}({func_args})")
+                print(
+                    f"[Agent] Calling tool: "
+                    f"{func_name}({func_args})"
+                )
 
-            tool_result = _dispatch_tool(func_name, func_args)
+            tool_result = _dispatch_tool(
+                func_name,
+                func_args,
+            )
 
-            msgs.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": tool_result,
-            })
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -297,29 +357,46 @@ def run_coach_agent(messages: list) -> tuple[str, list]:
     msgs = list(messages)
 
     while True:
-        response = llm_call_with_tools(msgs, tools=COACH_TOOLS)
+        response = llm_call_with_tools(
+            msgs,
+            tools=COACH_TOOLS,
+        )
+
         assistant_message = response.choices[0].message
 
         if not assistant_message.tool_calls:
-            msgs.append({
-                "role": "assistant",
-                "content": assistant_message.content,
-            })
+            msgs.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_message.content,
+                }
+            )
+
             return assistant_message.content, msgs
 
         msgs.append(assistant_message)
 
         for tool_call in assistant_message.tool_calls:
             func_name = tool_call.function.name
-            func_args = json.loads(tool_call.function.arguments)
+            func_args = json.loads(
+                tool_call.function.arguments
+            )
 
             if DEBUG:
-                print(f"[Coach Agent] Calling tool: {func_name}({func_args})")
+                print(
+                    f"[Coach Agent] Calling tool: "
+                    f"{func_name}({func_args})"
+                )
 
-            tool_result = _dispatch_coach_tool(func_name, func_args)
+            tool_result = _dispatch_coach_tool(
+                func_name,
+                func_args,
+            )
 
-            msgs.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": tool_result,
-            })
+            msgs.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": tool_result,
+                }
+            )

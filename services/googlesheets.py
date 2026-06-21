@@ -95,6 +95,50 @@ def log_student_signal(student_id: str, signal_type: str, severity: str, urgency
 # Coach — fetch pending signals for day plan generation
 # ---------------------------------------------------------------------------
 
+SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+URGENCY_RANK  = {"today": 0, "tomorrow": 1, "this week": 2}
+
+
+def get_pending_signals_structured() -> list[dict]:
+    """
+    Fetch all unactioned signals from signal_sheet as a list of normalized
+    dicts, pre-sorted by severity then urgency (most critical first).
+
+    Each dict has the keys: student_id, signal_type, severity, urgency,
+    reason, timestamp. This is the structured counterpart to
+    get_pending_signals() and is the source of truth for the day-plan
+    scheduler / reconciliation engine.
+
+    Returns an empty list when there are no pending signals. Raises on
+    backend errors so callers can distinguish "no work" from "lookup failed".
+
+    Severity order : Critical > High > Medium > Low
+    Urgency order  : Today > Tomorrow > This Week
+    """
+    sheet   = spreadsheet.worksheet("signal_sheet")
+    records = sheet.get_all_records()
+
+    pending = [
+        {
+            "student_id":  str(r.get("student_id", "")).strip(),
+            "signal_type": str(r.get("signal_type", "")).strip(),
+            "severity":    str(r.get("severity", "")).strip(),
+            "urgency":     str(r.get("urgency", "")).strip(),
+            "reason":      str(r.get("reason", "")).strip(),
+            "timestamp":   str(r.get("timestamp", "")).strip(),
+        }
+        for r in records
+        if str(r.get("actioned", "")).strip().lower() == "no"
+    ]
+
+    pending.sort(key=lambda r: (
+        SEVERITY_RANK.get(r["severity"].lower(), 99),
+        URGENCY_RANK.get(r["urgency"].lower(), 99),
+    ))
+
+    return pending
+
+
 def get_pending_signals() -> str:
     """
     Fetch all unactioned signals from signal_sheet, pre-sorted by severity
@@ -103,28 +147,14 @@ def get_pending_signals() -> str:
     Severity order : Critical > High > Medium > Low
     Urgency order  : Today > Tomorrow > This Week
     """
-    SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    URGENCY_RANK  = {"today": 0, "tomorrow": 1, "this week": 2}
-
     try:
-        sheet   = spreadsheet.worksheet("signal_sheet")
-        records = sheet.get_all_records()
-
-        pending = [
-            r for r in records
-            if str(r.get("actioned", "")).strip().lower() == "no"
-        ]
+        pending = get_pending_signals_structured()
 
         if not pending:
             return (
                 "No pending signals found. "
                 "All students are currently on track — no sessions needed today."
             )
-
-        pending.sort(key=lambda r: (
-            SEVERITY_RANK.get(str(r.get("severity", "")).strip().lower(), 99),
-            URGENCY_RANK.get(str(r.get("urgency",  "")).strip().lower(), 99),
-        ))
 
         lines = [f"Total pending signals: {len(pending)}\n"]
         for i, r in enumerate(pending, 1):
