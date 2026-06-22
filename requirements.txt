@@ -1,9 +1,0 @@
-streamlit==1.58.0
-openai==2.43.0
-gspread==6.2.1
-python-dotenv==1.2.2
-mem0ai
-langchain
-langgraph
-langchain-chroma
-google-api-python-client
