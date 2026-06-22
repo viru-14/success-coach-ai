@@ -15,3 +15,6 @@ service-credentials.json
 test.py 
 
 state/
+.cursor/*
+
+REVIEW_REPORT.md
